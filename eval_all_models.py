@@ -4,9 +4,9 @@ import subprocess
 from pathlib import Path
 import re
 
-config_map = {'VanillaVAE':'vae.yaml',
-              'MIWAE':'miwae.yaml',
-              'DFCVAE':'dfc_vae.yaml',
+config_map = {'VanillaVAE':'vae/vae.yaml',
+              'MIWAE':'vae/miwae.yaml',
+              'DFCVAE':'vae/dfc_vae.yaml',
               'BaseAE':'base_ae.yaml',
               'BigAE':'big_ae.yaml',
               'VGGAE':'vgg_ae.yaml',
@@ -21,8 +21,9 @@ config_map = {'VanillaVAE':'vae.yaml',
               'PatientVVBigAE':'patient_vvbig_ae.yaml',
               'MSSIM_AE':'mssim_ae.yaml',
               'DifficultySamplerAE':'difficulty_sampler.yaml',
+              'DifficultySamplerAEV2':'difficulty_samplerv2.yaml',
               'LinearDifficultySamplerAE':'difficulty_sampler.yaml',
-              'MSSIMVAE':'mssim_vae.yaml'}
+              'MSSIMVAE':'vae/mssim_vae.yaml'}
 
 def parse_args():
     parser = argparse.ArgumentParser(description='Test all trained VAE models on specified datasets')
