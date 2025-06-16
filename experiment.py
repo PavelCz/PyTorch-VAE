@@ -155,14 +155,18 @@ class VAEXperiment(pl.LightningModule):
         imgs, labels, img_names = batch
         self.curr_device = imgs.device
 
-        if not hasattr(self, 'test_data'):
-            self.test_data = []
+        if not hasattr(self, 'loss_data'):
+            # Only store loss data, not images, to avoid RAM issues
+            self.loss_data = []
             self.loss_stats = {
                 'total_loss': {'min': float('inf'), 'max': float('-inf')},
                 'recon_loss': {'min': float('inf'), 'max': float('-inf')},
                 'feature_loss': {'min': float('inf'), 'max': float('-inf')}
             }
-            print("Starting image collection for visualization...")
+            # Set up directories for immediate saving
+            self._setup_test_directories()
+            self.saved_image_count = 0
+            print("Starting image processing and immediate saving...")
 
         results = self.forward(imgs, labels=labels)
         test_loss = self.model.loss_function(*results,
@@ -171,7 +175,7 @@ class VAEXperiment(pl.LightningModule):
                                             batch_idx=batch_idx)
         self.log_dict({f"test_{key}": val.item() for key, val in test_loss.items()}, sync_dist=True)
 
-        # Process each image individually and collect data
+        # Process each image individually and save immediately
         for i in range(imgs.size(0)):
             single_img = imgs[i:i+1]
             single_label = labels[i:i+1] if labels is not None else None
@@ -197,79 +201,117 @@ class VAEXperiment(pl.LightningModule):
                 self.loss_stats['feature_loss']['min'] = min(self.loss_stats['feature_loss']['min'], feature_loss)
                 self.loss_stats['feature_loss']['max'] = max(self.loss_stats['feature_loss']['max'], feature_loss)
 
-            original_resized = F.interpolate(
-                single_img, size=self.test_output_size, mode='bilinear', align_corners=False
-            )
-            reconstruction_resized = F.interpolate(
-                recons, size=self.test_output_size, mode='bilinear', align_corners=False
-            )
-
-            self.test_data.append({
+            # Store only loss data for histogram generation
+            self.loss_data.append({
                 'name': img_names[i],
-                'original': original_resized.cpu(),
-                'reconstruction': reconstruction_resized.cpu(),
                 'total_loss': total_loss,
                 'recon_loss': recon_loss,
                 'feature_loss': feature_loss
             })
 
+            # Process and save images immediately if not in histogram-only mode
+            if not self.params.get('histogram_only', False):
+                self._save_single_image_immediately(single_img, recons, img_names[i], total_loss)
+            
+            self.saved_image_count += 1
+
         return test_loss
+
+    def _setup_test_directories(self):
+        """Set up directories for saving test images"""
+        if self.params.get('extra_image_outputs', False):
+            self.original_dir = os.path.join(self.params['test_output_dir'], "originals")
+            self.recon_dir = os.path.join(self.params['test_output_dir'], "reconstructions")
+            self.comparison_dir = os.path.join(self.params['test_output_dir'], "side-by-side")
+            os.makedirs(self.original_dir, exist_ok=True)
+            os.makedirs(self.recon_dir, exist_ok=True)
+            os.makedirs(self.comparison_dir, exist_ok=True)
+        else:
+            self.comparison_dir = self.params['test_output_dir']
+            os.makedirs(self.comparison_dir, exist_ok=True)
+
+    def _save_single_image_immediately(self, original, reconstruction, img_name, total_loss):
+        """Save a single image comparison immediately to avoid memory accumulation"""
+        # Resize images to standard output size
+        original_resized = F.interpolate(
+            original, size=self.test_output_size, mode='bilinear', align_corners=False
+        )
+        reconstruction_resized = F.interpolate(
+            reconstruction, size=self.test_output_size, mode='bilinear', align_corners=False
+        )
+
+        # Save individual images if requested
+        if self.params.get('extra_image_outputs', False):
+            vutils.save_image(original_resized.cpu().data,
+                              os.path.join(self.original_dir, f"{img_name}"),
+                              normalize=True)
+            vutils.save_image(reconstruction_resized.cpu().data,
+                              os.path.join(self.recon_dir, f"{img_name}"),
+                              normalize=True)
+
+        # Calculate normalized loss for comparison image
+        total_norm_loss = self._calculate_current_normalized_loss(total_loss, 'total_loss')
+        
+        # Create side-by-side comparison image
+        final_img = draw.create_side_by_side_image(
+            self.params, 
+            original_resized.cpu(), 
+            reconstruction_resized.cpu(), 
+            total_loss, 
+            total_norm_loss
+        )
+        
+        # Save the comparison image
+        final_img.save(os.path.join(self.comparison_dir, f"{img_name}"))
+
+    def _calculate_current_normalized_loss(self, loss_value, loss_type):
+        """
+        Calculate normalized loss (0-1) based on current min/max values.
+        Note: This is an approximation since we don't have all values yet.
+        """
+        if loss_type == 'total_loss':
+            min_val = self.loss_stats['total_loss']['min']
+            max_val = self.loss_stats['total_loss']['max']
+        elif loss_type == 'recon_loss':
+            min_val = self.loss_stats['recon_loss']['min']
+            max_val = self.loss_stats['recon_loss']['max']
+        elif loss_type == 'feature_loss':
+            min_val = self.loss_stats['feature_loss']['min']
+            max_val = self.loss_stats['feature_loss']['max']
+        else:
+            return 0.5  # Default middle value
+        
+        # Avoid division by zero
+        if max_val == min_val:
+            return 0.5
+        
+        # Normalize to 0-1 range
+        normalized = (loss_value - min_val) / (max_val - min_val)
+        return max(0, min(1, normalized))  # Clamp to [0,1]
 
     def on_test_end(self):
         """
-        Function called at the end of test to save all images
+        Function called at the end of test to save histogram and generate samples
         """
-        if self.params['extra_image_outputs']:
-            original_dir = os.path.join(self.params['test_output_dir'], "originals")
-            recon_dir = os.path.join(self.params['test_output_dir'], "reconstructions")
-            comparison_dir = os.path.join(self.params['test_output_dir'], "side-by-side")
-            os.makedirs(original_dir, exist_ok=True)
-            os.makedirs(recon_dir, exist_ok=True)
-        else:
-            comparison_dir = self.params['test_output_dir']
-        os.makedirs(comparison_dir, exist_ok=True)
-
         print("Saving histogram...")
-        draw.save_loss_histogram(self.params, self.test_data)
-        if self.params['histogram_only']:
-            print("Skipping image saving as requested.")
-            return
-        print("Saving reconstructed images...")
-
-        for data in self.test_data:
-            img_name = data['name']
-            original = data['original']
-            reconstruction = data['reconstruction']
-            total_loss = data['total_loss']
-            
-            # Save individual images if needed
-            if self.params['extra_image_outputs']:
-                vutils.save_image(original.data,
-                                  os.path.join(original_dir, f"{img_name}"),
-                                  normalize=True)
-                vutils.save_image(reconstruction.data,
-                                  os.path.join(recon_dir, f"{img_name}"),
-                                  normalize=True)
-
-            total_norm_loss = self.normalize_loss(total_loss, 'total_loss')            
-            final_img = draw.create_side_by_side_image(self.params, original, reconstruction, total_loss, total_norm_loss)
-            
-            # Save the comparison
-            final_img.save(os.path.join(comparison_dir, f"{img_name}"))
-
-        print(f"Saved {len(self.test_data)} annotated images.")
-        print(f"Side-by-side comparisons saved to: {comparison_dir}")
-        if self.params['extra_image_outputs']:
-            print(f"Individual original images saved to: {original_dir}")
-            print(f"Individual reconstructed images saved to: {recon_dir}")
+        draw.save_loss_histogram(self.params, self.loss_data)
+        
+        if self.params.get('histogram_only', False):
+            print("Skipping additional processing as requested.")
+        else:
+            print(f"Already saved {self.saved_image_count} annotated images during processing.")
+            print(f"Side-by-side comparisons saved to: {self.comparison_dir}")
+            if self.params.get('extra_image_outputs', False):
+                print(f"Individual original images saved to: {self.original_dir}")
+                print(f"Individual reconstructed images saved to: {self.recon_dir}")
 
         if self.params['extra_image_outputs']:
             self.generate_random_samples()
 
         # Clean up stored data
-        delattr(self, 'test_data')
+        delattr(self, 'loss_data')
         delattr(self, 'loss_stats')
-        
+
     def generate_random_samples(self):
         """
         Generate random samples from the latent space
@@ -361,11 +403,11 @@ class VAEXperiment(pl.LightningModule):
         """
         # Extract all values of this loss type from the test data
         if loss_type == 'total_loss':
-            all_values = [data['total_loss'] for data in self.test_data]
+            all_values = [data['total_loss'] for data in self.loss_data]
         elif loss_type == 'recon_loss':
-            all_values = [data['recon_loss'] for data in self.test_data]
+            all_values = [data['recon_loss'] for data in self.loss_data]
         elif loss_type == 'feature_loss':
-            all_values = [data['feature_loss'] for data in self.test_data if data['feature_loss'] is not None]
+            all_values = [data['feature_loss'] for data in self.loss_data if data['feature_loss'] is not None]
 
         # Calculate the percentile (0 to 1) of this value within the distribution
         percentile = sum(1 for x in all_values if x <= loss_value) / len(all_values)
