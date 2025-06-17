@@ -263,9 +263,20 @@ class VAEXperiment(pl.LightningModule):
             total_loss, 
             total_norm_loss
         )
-        
-        # Save the comparison image
-        final_img.save(os.path.join(self.comparison_dir, f"{img_name}"))
+        # self.logger.log_image(f"epoch_{self.current_epoch}_{key}.png", comparison)
+        if isinstance(self.logger, WandbLogger):
+            # self.logger.log_image({f"{key}": comparison, "epoch": self.current_epoch})
+            self.logger.experiment.log(
+                {
+                    f"test_image": wandb.Image(final_img, caption=f"{img_name}"), 
+                    "epoch": self.current_epoch,
+                    "loss": total_loss
+                }
+            )
+            # self.logger.log_image(key=key, images=[comparison], )
+        else:
+            # Save the comparison image
+            final_img.save(os.path.join(self.comparison_dir, f"{img_name}"))
 
     def _calculate_current_normalized_loss(self, loss_value, loss_type):
         """
