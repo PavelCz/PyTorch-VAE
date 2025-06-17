@@ -12,6 +12,7 @@ import torch.nn.functional as F
 from torch.utils.data import DataLoader
 import draw
 from pytorch_lightning.loggers import WandbLogger
+import wandb
 
 class VAEXperiment(pl.LightningModule):
 
@@ -114,7 +115,9 @@ class VAEXperiment(pl.LightningModule):
                 comparison = draw.create_side_by_side_image(self.params, img_resized, recon_resized, loss_val, norm_loss)
                 # self.logger.log_image(f"epoch_{self.current_epoch}_{key}.png", comparison)
                 if isinstance(self.logger, WandbLogger):
-                    self.logger.experiment.log({f"{key}": comparison, "epoch": self.current_epoch})
+                    # self.logger.log_image({f"{key}": comparison, "epoch": self.current_epoch})
+                    self.logger.experiment.log({f"{key}": wandb.Image(comparison), "epoch": self.current_epoch})
+                    # self.logger.log_image(key=key, images=[comparison], )
         
         self.reset_extreme_image_tracking()
 
