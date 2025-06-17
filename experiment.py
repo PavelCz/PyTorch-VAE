@@ -116,7 +116,15 @@ class VAEXperiment(pl.LightningModule):
                 # self.logger.log_image(f"epoch_{self.current_epoch}_{key}.png", comparison)
                 if isinstance(self.logger, WandbLogger):
                     # self.logger.log_image({f"{key}": comparison, "epoch": self.current_epoch})
-                    self.logger.experiment.log({f"{key}": wandb.Image(comparison), "epoch": self.current_epoch})
+                    self.logger.experiment.log(
+                        {
+                            f"{key}": wandb.Image(
+                                comparison, caption=f"Epoch {self.current_epoch}"
+                            ), 
+                            "epoch": self.current_epoch,
+                            "loss": loss_val
+                        }
+                    )
                     # self.logger.log_image(key=key, images=[comparison], )
         
         self.reset_extreme_image_tracking()
