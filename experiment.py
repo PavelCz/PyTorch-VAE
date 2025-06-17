@@ -11,7 +11,8 @@ import torchvision.utils as vutils
 import torch.nn.functional as F
 from torch.utils.data import DataLoader
 import draw
-
+from pytorch_lightning.loggers import WandbLogger
+import wandb
 
 class VAEXperiment(pl.LightningModule):
 
@@ -93,8 +94,8 @@ class VAEXperiment(pl.LightningModule):
         self.trainer.datamodule.on_epoch_end()
         
         # Create directory for saving comparisons
-        comparisons_dir = os.path.join(self.logger.log_dir, "highest_and_lowest_loss_imgs")
-        os.makedirs(comparisons_dir, exist_ok=True)
+        # comparisons_dir = os.path.join(self.logger.log_dir, "highest_and_lowest_loss_imgs")
+        # os.makedirs(comparisons_dir, exist_ok=True)
         
         # Save extreme images
         for key in ['highest', 'lowest']:
@@ -112,10 +113,11 @@ class VAEXperiment(pl.LightningModule):
                 loss_val = data['loss'] * 1000
                 norm_loss = 0 if key == 'lowest' else 1
                 comparison = draw.create_side_by_side_image(self.params, img_resized, recon_resized, loss_val, norm_loss)
-                comparison.save(os.path.join(
-                    comparisons_dir, 
-                    f"epoch_{self.current_epoch}_{key}.png"
-                ))
+                # self.logger.log_image(f"epoch_{self.current_epoch}_{key}.png", comparison)
+                if isinstance(self.logger, WandbLogger):
+                    # self.logger.log_image({f"{key}": comparison, "epoch": self.current_epoch})
+                    self.logger.experiment.log({f"{key}": wandb.Image(comparison), "epoch": self.current_epoch})
+                    # self.logger.log_image(key=key, images=[comparison], )
         
         self.reset_extreme_image_tracking()
 
